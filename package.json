@@ -13,7 +13,7 @@
   "private": true,
   "dependencies": {
     "axios": "^1.0.0",
-    "simple-git": "^3.21.0",
+    "gitlog": "^4.0.8",
     "tslib": "^2.3.0",
     "yargs": "^17.7.2"
   },

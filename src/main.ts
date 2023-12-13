@@ -1,59 +1,71 @@
 #!/usr/bin/env node
-import { existsSync, readFileSync, readdirSync, statSync, writeFile } from 'fs';
+import { promises } from 'fs';
+import { gitlogPromise } from 'gitlog';
 import { join } from 'path';
-import simpleGit from 'simple-git';
 
-export function validateArgs(args: string[]) {
+const { readFile, writeFile, access } = promises;
+
+export async function validateArgs(args: string[]) {
   const repoPath = args?.[0]?.trim() || '';
   const contributorsPath = args?.[1] || 'packages';
   if (repoPath.length === 0) {
     throw new Error('No repo path provided');
   }
-  if (!existsSync(repoPath)) {
+  try {
+    await access(repoPath);
+    await access(join(repoPath, contributorsPath));
+  } catch (error) {
     throw new Error(
-      'Repo path does not exist, or it was not provided as an absolute path'
-    );
-  }
-  if (!existsSync(join(repoPath, contributorsPath))) {
-    throw new Error(
-      'Contributors path does not exist, or it was not provided as an absolute path'
+      `Path does not exist, or it was not provided as an absolute path: ${error.message}`
     );
   }
   return { repoPath, contributorsPath };
 }
 
-export async function countMultiProjectContributors(
+export async function countProjectContributors(
   repoPath: string,
   contributorsPath: string
 ) {
-  //assuming recursion is not needed here
-  const subFolders = readdirSync(join(repoPath, contributorsPath)).filter((x) =>
-    statSync(join(repoPath, contributorsPath, x)).isDirectory()
+  const contributors = new Map<string, Set<string>>();
+  const logs = await gitlogPromise({
+    repo: join(repoPath),
+    fields: ['authorName'],
+    number: 200, // max number of logs
+  });
+  const filteredLogs = logs.filter((x) =>
+    x.files.find((y) => y.includes(contributorsPath))
   );
-  const contributors = new Map<string, number>();
-  for (const subFolder of subFolders) {
-    const logs = await simpleGit(
-      join(repoPath, contributorsPath, subFolder)
-    ).log();
-    for (const log of logs.all) {
-      contributors.set(
-        log.author_name,
-        (contributors.get(log.author_name) || 0) + 1
-      );
-    }
+  for (const log of filteredLogs) {
+    const { authorName, files } = log;
+    const folders = contributors.get(authorName) || new Set<string>();
+    files
+      .filter((x) => x.includes(contributorsPath))
+      //assuming that the path is packages/<folder-name>/...
+      .forEach((file) => folders.add(file.split('/')?.[1]));
+    contributors.set(authorName, folders);
   }
-  return Array.from(contributors.entries()).filter(([, count]) => count > 1);
+  return contributors;
 }
 
 export async function updateReadMe(
   repoPath: string,
-  contributors: [string, number][]
+  contributors: Map<string, Set<string>>
 ) {
   const readmePath = join(repoPath, 'README.md');
-  let readme = readFileSync(readmePath, 'utf-8');
-  const content = `<!-- contributors:start -->\n${contributors
-    .map(([name, count]) => `- ${name} (${count})`)
-    .join('\n')}\nTotal: ${contributors.length}\n<!-- contributors:end -->`;
+  let readme: string;
+  try {
+    readme = await readFile(readmePath, 'utf-8');
+  } catch (error) {
+    readme = '';
+  }
+  const multiProjectContributors = Array.from(contributors.entries())
+    .filter(([, folders]) => folders.size > 1)
+    .map(([author, folders]) => [author, folders.size]);
+  const content = `<!-- contributors:start -->\n${multiProjectContributors
+    .map(([name, count]) => `- ${name} (${count} commits)`)
+    .join('\n')}\nTotal Multi Contributors: ${
+    multiProjectContributors.length
+  }\nTotal Contributors: ${contributors.size}\n<!-- contributors:end -->`;
   if (!readme.includes('<!-- contributors:start -->')) {
     readme += `\n\n${content}`;
   } else {
@@ -62,25 +74,21 @@ export async function updateReadMe(
       content
     );
   }
-  writeFile(readmePath, readme, 'utf-8', (err) => {
-    if (err) {
-      console.error(err);
-    }
-  });
+  await writeFile(readmePath, readme);
 }
 
 export async function main() {
   try {
     const args = process.argv.slice(2);
-    const { repoPath, contributorsPath } = validateArgs(args);
-    const contributors = await countMultiProjectContributors(
+    const { repoPath, contributorsPath } = await validateArgs(args);
+    const contributors = await countProjectContributors(
       repoPath,
       contributorsPath
     );
     await updateReadMe(repoPath, contributors);
     console.debug('SUCCESS! :)');
   } catch (e) {
-    console.error(e);
+    console.error('ERROR! :(');
   }
 }
 
