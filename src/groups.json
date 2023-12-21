@@ -1,0 +1,10 @@
+[
+  {
+    "name": "group1",
+    "folders": ["folderA"]
+  },
+  {
+    "name": "group2",
+    "folders": ["folderB", "folderC"]
+  }
+]

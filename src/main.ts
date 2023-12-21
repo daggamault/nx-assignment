@@ -5,9 +5,18 @@ import { join } from 'path';
 
 const { readFile, writeFile, access } = promises;
 
+interface Group {
+  name: string;
+  folders: string[];
+}
+
 export async function validateArgs(args: string[]) {
   const repoPath = args?.[0]?.trim() || '';
   const contributorsPath = args?.[1] || 'packages';
+  const maxEntries = args?.[2] || 200;
+  const groupsJsonFile = args?.[3] || './src/groups.json';
+  const file = await readFile(groupsJsonFile, 'utf-8');
+  const groups: Group[] = file ? JSON.parse(file) : [];
   if (repoPath.length === 0) {
     throw new Error('No repo path provided');
   }
@@ -19,18 +28,21 @@ export async function validateArgs(args: string[]) {
       `Path does not exist, or it was not provided as an absolute path: ${error.message}`
     );
   }
-  return { repoPath, contributorsPath };
+  return { repoPath, contributorsPath, maxEntries, groups };
 }
 
 export async function countProjectContributors(
   repoPath: string,
-  contributorsPath: string
+  contributorsPath: string,
+  maxEntries: number,
+  groups: Group[]
 ) {
   const contributors = new Map<string, Set<string>>();
+  console.warn(maxEntries, groups);
   const logs = await gitlogPromise({
     repo: join(repoPath),
     fields: ['authorName'],
-    number: 200, // max number of logs
+    number: maxEntries, // max number of logs
   });
   const filteredLogs = logs.filter((x) =>
     x.files.find((y) => y.includes(contributorsPath))
@@ -41,8 +53,13 @@ export async function countProjectContributors(
     files
       .filter((x) => x.includes(contributorsPath))
       //assuming that the path is packages/<folder-name>/...
-      .forEach((file) => folders.add(file.split('/')?.[1]));
+      .forEach((file) => {
+        const folder = file.split('/')?.[1];
+        const group = groups.find((x) => x.folders.includes(folder));
+        folders.add(group?.name);
+      });
     contributors.set(authorName, folders);
+    console.warn(contributors);
   }
   return contributors;
 }
@@ -80,15 +97,19 @@ export async function updateReadMe(
 export async function main() {
   try {
     const args = process.argv.slice(2);
-    const { repoPath, contributorsPath } = await validateArgs(args);
+    const { repoPath, contributorsPath, maxEntries, groups } =
+      await validateArgs(args);
     const contributors = await countProjectContributors(
       repoPath,
-      contributorsPath
+      contributorsPath,
+      +maxEntries,
+      groups
     );
     await updateReadMe(repoPath, contributors);
     console.debug('SUCCESS! :)');
   } catch (e) {
-    console.error('ERROR! :(');
+    console.warn(e);
+    console.error('ERROR! :(', e.message);
   }
 }
 
